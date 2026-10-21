@@ -101,11 +101,185 @@ function wrapConversation(text: string, columns: number): string[] {
 }
 
 function App(props: { status: string }) {
+  const [editor, setEditor] = useState<EditorState>(emptyEditor);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const { columns, rows } = useTerminalSize();
+  const isTooSmall = columns < 40 || rows < 16;
+  // Reserve outer padding, the prompt prefix and a spare end-of-line cursor cell.
+  const editorColumns = Math.max(2, columns - 5);
+  const draftRows = layoutDraft(editor.text, editorColumns);
+  const cursorRow = draftRows.findLastIndex((row) => row.start <= editor.cursor);
+  const inputRows = Math.min(3, draftRows.length);
+  const firstInputRow = Math.min(
+    Math.max(0, cursorRow - 1),
+    draftRows.length - inputRows,
+  );
+  const visibleCount = Math.min(3, Math.max(0, Math.floor((rows - 13 - inputRows) / 2)));
+  const visibleMessages = visibleCount > 0 ? messages.slice(-visibleCount) : [];
+
+  function insertText(value: string) {
+    const text = cleanInput(value);
+    if (!text) return;
+    setEditor((previous) => {
+      const nextText =
+        previous.text.slice(0, previous.cursor) + text +
+        previous.text.slice(previous.cursor);
+      const insertionEnd = previous.cursor + text.length;
+      // Insertion can merge a combining mark or emoji into a neighboring grapheme.
+      const boundaries = [...segmenter.segment(nextText)].map((part) => part.index);
+      boundaries.push(nextText.length);
+      return {
+        text: nextText,
+        cursor: boundaries.find((position) => position >= insertionEnd) ?? nextText.length,
+        preferredColumn: null,
+      };
+    });
+  }
+
+  // Keeping these hooks mounted also keeps the app alive in the compact view.
+  usePaste((text) => {
+    if (!isTooSmall) insertText(text);
+  });
+
+  useInput((input, key) => {
+    if (isTooSmall || key.eventType === "release") return;
+
+    if (input === "\n" || (key.ctrl && input === "j") ||
+        (key.return && (key.shift || key.meta))) {
+      insertText("\n");
+      return;
+    }
+
+    if (key.return) {
+      handleSubmit(editor.text);
+      return;
+    }
+
+    if (key.upArrow || key.downArrow) {
+      const targetRow = cursorRow + (key.upArrow ? -1 : 1);
+      if (targetRow < 0 || targetRow >= draftRows.length) return;
+      const column = editor.preferredColumn ?? cursorColumn(draftRows[cursorRow]!, editor.cursor);
+      const target = draftRows[targetRow]!;
+      let cursor = cursorAtColumn(target, column);
+      // The boundary after a soft-wrapped row belongs to the following row.
+      if (draftRows[targetRow + 1]?.start === cursor) {
+        cursor = target.cells.at(-1)?.start ?? cursor;
+      }
+      setEditor({
+        ...editor,
+        cursor,
+        preferredColumn: column,
+      });
+      return;
+    }
+
+    const boundaries = [...segmenter.segment(editor.text)].map((part) => part.index);
+    boundaries.push(editor.text.length);
+    const before = boundaries.findLast((position) => position < editor.cursor) ?? 0;
+    const after = boundaries.find((position) => position > editor.cursor) ?? editor.text.length;
+
+    if (key.home || (key.ctrl && input === "a")) {
+      setEditor({ ...editor, cursor: 0, preferredColumn: null });
+    } else if (key.end || (key.ctrl && input === "e")) {
+      setEditor({ ...editor, cursor: editor.text.length, preferredColumn: null });
+    } else if (key.leftArrow || key.rightArrow) {
+      setEditor({ ...editor, cursor: key.leftArrow ? before : after, preferredColumn: null });
+    } else if (key.backspace || key.delete) {
+      const start = key.backspace ? before : editor.cursor;
+      const end = key.backspace ? editor.cursor : after;
+      const text = editor.text.slice(0, start) + editor.text.slice(end);
+      const nextBoundaries = [...segmenter.segment(text)].map((part) => part.index);
+      setEditor({
+        text,
+        cursor: nextBoundaries.find((position) => position >= start) ?? text.length,
+        preferredColumn: null,
+      });
+    } else if (key.tab) {
+      insertText("    ");
+    } else if (!key.ctrl && !key.meta && !key.escape) {
+      insertText(input);
+    }
+  });
+
+  function handleSubmit(value: string) {
+    const message = value.trim();
+
+    if (message.length === 0) {
+      return;
+    }
+
+    const newMessage: Message = {
+      id: randomUUID(),
+      text: message,
+    };
+
+    setMessages((previous) => [...previous, newMessage]);
+    setEditor(emptyEditor);
+  }
+
+  if (isTooSmall) {
+    return (
+      <Box
+        width={Math.max(1, columns)}
+        height={Math.max(1, rows - 1)}
+        overflow="hidden"
+      >
+        <Text wrap="truncate-end">
+          Enlarge terminal to 40 columns × 16 rows. Ctrl+C exits.
+        </Text>
+      </Box>
+    );
+  }
+
   return (
-    <Box flexDirection="column" padding={1}>
+    <Box flexDirection="column" padding={1} width={columns}>
       <Text bold>1kaDouble.Ai</Text>
       <Text>CLI foundation is running.</Text>
-      <Text>{props.status}</Text>
+      <Text wrap="truncate-end">{props.status}</Text>
+      <Box
+        flexDirection="column"
+        height={visibleCount * 2}
+        marginTop={1}
+        overflow="hidden"
+      >
+        {visibleMessages.map((message) => (
+          <Box key={message.id} flexDirection="column" flexShrink={0}>
+            <Text wrap="truncate-end">You: {message.text.replace(/\s+/g, " ")}</Text>
+            <Text dimColor wrap="truncate-end">
+              Demo reply: message received locally. No AI call.
+            </Text>
+          </Box>
+        ))}
+      </Box>
+
+      <Box flexDirection="column" height={inputRows} flexShrink={0}>
+        {draftRows.slice(firstInputRow, firstInputRow + inputRows).map((row, index) => {
+          const rowIndex = firstInputRow + index;
+          const hasCursor = rowIndex === cursorRow;
+          const cursorCell = row.cells.find((cell) => cell.start === editor.cursor);
+          const before = hasCursor
+            ? row.cells.filter((cell) => cell.end <= editor.cursor).map((cell) => cell.text).join("")
+            : row.cells.map((cell) => cell.text).join("");
+          const after = hasCursor
+            ? row.cells.filter((cell) => cell.start > editor.cursor).map((cell) => cell.text).join("")
+            : "";
+
+          return (
+            <Box key={rowIndex} height={1} flexShrink={0}>
+              <Text color="cyan">{rowIndex === 0 ? "> " : index === 0 ? "↑ " : "  "}</Text>
+              <Text wrap="truncate-end">
+                {editor.text === "" ? (
+                  <><Text inverse> </Text><Text dimColor>Type a message...</Text></>
+                ) : (
+                  <>{before}{hasCursor && <Text inverse>{cursorCell?.text ?? " "}</Text>}{after}</>
+                )}
+              </Text>
+            </Box>
+          );
+        })}
+      </Box>
+
+      <Text dimColor wrap="truncate-end">Enter send · ^J newline · ^C exit</Text>
     </Box>
   );
 }
@@ -126,5 +300,4 @@ try {
 }
 
 await app.waitUntilRenderFlush();
-app.unmount();
 await app.waitUntilExit();
