@@ -252,6 +252,20 @@ function App(props: { status: string }) {
         ))}
       </Box>
 
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        paddingX={1}
+        marginTop={1}
+      >
+        <Text bold wrap="truncate-end">
+          Sponsored · Demo placement
+        </Text>
+        <Text dimColor wrap="truncate-end">
+          Sample sponsor text. No advertising revenue.
+        </Text>
+      </Box>
+
       <Box flexDirection="column" height={inputRows} flexShrink={0}>
         {draftRows.slice(firstInputRow, firstInputRow + inputRows).map((row, index) => {
           const rowIndex = firstInputRow + index;
