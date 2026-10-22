@@ -103,6 +103,7 @@ function wrapConversation(text: string, columns: number): string[] {
 function App(props: { status: string }) {
   const [editor, setEditor] = useState<EditorState>(emptyEditor);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [historyOffset, setHistoryOffset] = useState(0);
   const { columns, rows } = useTerminalSize();
   const isTooSmall = columns < 40 || rows < 16;
   // Reserve outer padding, the prompt prefix and a spare end-of-line cursor cell.
@@ -124,7 +125,9 @@ function App(props: { status: string }) {
     })),
     { id: `${message.id}-gap`, text: "", dim: false },
   ]);
-  const historyEnd = historyLines.length;
+  const maxHistoryOffset = Math.max(0, historyLines.length - historyHeight);
+  const scrollOffset = Math.min(historyOffset, maxHistoryOffset);
+  const historyEnd = historyLines.length - scrollOffset;
   const visibleHistory = historyLines.slice(
     Math.max(0, historyEnd - historyHeight), historyEnd,
   );
@@ -155,6 +158,13 @@ function App(props: { status: string }) {
 
   useInput((input, key) => {
     if (isTooSmall || key.eventType === "release") return;
+
+    if (key.pageUp || key.pageDown || (key.ctrl && (input === "p" || input === "n"))) {
+      const direction = key.pageUp || (key.ctrl && input === "p") ? 1 : -1;
+      const page = Math.max(1, historyHeight - 1);
+      setHistoryOffset(Math.max(0, Math.min(maxHistoryOffset, scrollOffset + direction * page)));
+      return;
+    }
 
     if (input === "\n" || (key.ctrl && input === "j") ||
         (key.return && (key.shift || key.meta))) {
@@ -226,6 +236,7 @@ function App(props: { status: string }) {
     };
 
     setMessages((previous) => [...previous, newMessage]);
+    setHistoryOffset(0);
     setEditor(emptyEditor);
   }
 
@@ -302,7 +313,13 @@ function App(props: { status: string }) {
         })}
       </Box>
 
-      <Text dimColor wrap="truncate-end">Enter send · ^J newline · ^C exit</Text>
+      <Text dimColor wrap="truncate-end">
+        {scrollOffset > 0
+          ? `History: ${scrollOffset} rows above latest · PgDn or Ctrl+N to return`
+          : columns >= 60
+            ? "Enter send · ^J newline · PgUp/PgDn history · ^C exit"
+            : "Enter send · ^J newline · ^C exit"}
+      </Text>
     </Box>
   );
 }
