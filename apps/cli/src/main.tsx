@@ -114,8 +114,20 @@ function App(props: { status: string }) {
     Math.max(0, cursorRow - 1),
     draftRows.length - inputRows,
   );
-  const visibleCount = Math.min(3, Math.max(0, Math.floor((rows - 13 - inputRows) / 2)));
-  const visibleMessages = visibleCount > 0 ? messages.slice(-visibleCount) : [];
+  const historyHeight = Math.max(0, rows - 13 - inputRows);
+  const historyLines = messages.flatMap((message) => [
+    ...wrapConversation(`You: ${message.text}`, Math.max(2, columns - 2)).map((text, index) => ({
+      id: `${message.id}-user-${index}`, text, dim: false,
+    })),
+    ...wrapConversation("Demo reply: message received locally. No AI call.", Math.max(2, columns - 2)).map((text, index) => ({
+      id: `${message.id}-reply-${index}`, text, dim: true,
+    })),
+    { id: `${message.id}-gap`, text: "", dim: false },
+  ]);
+  const historyEnd = historyLines.length;
+  const visibleHistory = historyLines.slice(
+    Math.max(0, historyEnd - historyHeight), historyEnd,
+  );
 
   function insertText(value: string) {
     const text = cleanInput(value);
@@ -238,16 +250,13 @@ function App(props: { status: string }) {
       <Text wrap="truncate-end">{props.status}</Text>
       <Box
         flexDirection="column"
-        height={visibleCount * 2}
+        height={historyHeight}
         marginTop={1}
         overflow="hidden"
       >
-        {visibleMessages.map((message) => (
-          <Box key={message.id} flexDirection="column" flexShrink={0}>
-            <Text wrap="truncate-end">You: {message.text.replace(/\s+/g, " ")}</Text>
-            <Text dimColor wrap="truncate-end">
-              Demo reply: message received locally. No AI call.
-            </Text>
+        {visibleHistory.map((line) => (
+          <Box key={line.id} height={1} flexShrink={0}>
+            <Text dimColor={line.dim} wrap="truncate-end">{line.text || " "}</Text>
           </Box>
         ))}
       </Box>
